@@ -5,3 +5,6 @@ runs/
 *.tfevents*
 *.egg-info/
 */__pycache__/
+*.bc
+*.mp4
+*.png

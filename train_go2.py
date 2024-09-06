@@ -72,7 +72,7 @@ class Go2Env(PipelineEnv):
       kick_vel: float = 0.05,
       **kwargs,
   ):
-    path = epath.Path('resources/unitree_go2/smooth_scene_mjx.xml')
+    path = epath.Path('resources/unitree_go2/smooth_test.xml')
     sys = mjcf.load(path.as_posix())
     self._dt = 0.02  # this environment is 50 fps
     sys = sys.tree_replace({'opt.timestep': 0.004})
