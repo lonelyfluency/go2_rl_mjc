@@ -418,45 +418,104 @@ envs.register_environment('go2', Go2Env)
 env_name = 'go2'
 env = envs.get_environment(env_name)
 
-def make_ippo_networks_factory():
+# Create the two-agent (swing and stance) network factory
+def make_ippo_networks_factory(observation_size, action_size):
     """Creates the same network architecture for both swing and stance agents."""
     return {
-        "swing_agent": ppo_networks.make_ppo_networks(
-            policy_hidden_layer_sizes=(128, 128, 128, 128)
+        "swing_agent": lambda obs_size, act_size, **kwargs: ppo_networks.make_ppo_networks(
+            observation_size=obs_size,
+            action_size=act_size,
+            policy_hidden_layer_sizes=(128, 128, 128, 128),
+            **kwargs  # Ensure any additional arguments are passed here
         ),
-        "stance_agent": ppo_networks.make_ppo_networks(
-            policy_hidden_layer_sizes=(128, 128, 128, 128)
+        "stance_agent": lambda obs_size, act_size, **kwargs: ppo_networks.make_ppo_networks(
+            observation_size=obs_size,
+            action_size=act_size,
+            policy_hidden_layer_sizes=(128, 128, 128, 128),
+            **kwargs  # Ensure any additional arguments are passed here
         )
     }
 
-
-def train_ippo_agents(env, eval_env, num_timesteps=TIMESTEPS, **kwargs):
+# Train function to support the two agents
+def train_ippo_agents(env, eval_env, num_timesteps=100_000_000, **kwargs):
     """Trains two agents (swing and stance) using IPPO and updates their networks independently."""
     
-    agents = make_ippo_networks_factory()
+    # Get observation size and action size from the environment
+    dummy_reset = env.reset(jax.random.PRNGKey(0))
+    observation_size = dummy_reset.obs.shape[0]
+    action_size = env.action_size
 
-    # Setup partial functions for training both agents
-    swing_agent_train_fn = functools.partial(
-        ppo.train,
-        environment=env,
-        num_timesteps=num_timesteps,
-        network_factory=lambda: agents["swing_agent"],
-        **kwargs
-    )
+    # Create agents using the factory
+    agents = make_ippo_networks_factory(observation_size, action_size)
 
-    stance_agent_train_fn = functools.partial(
-        ppo.train,
-        environment=env,
-        num_timesteps=num_timesteps,
-        network_factory=lambda: agents["stance_agent"],
-        **kwargs
-    )
+    # Setup progress bars
+    progress_bar_swing = tqdm(total=num_timesteps, desc='Swing Agent Training Progress')
+    progress_bar_stance = tqdm(total=num_timesteps, desc='Stance Agent Training Progress')
+
+    def progress_swing(num_steps, metrics):
+        """Logs and visualizes progress for swing agent."""
+        times.append(datetime.now())
+        x_data_swing.append(num_steps)
+        y_data_swing.append(metrics['eval/episode_reward'])
+        ydataerr_swing.append(metrics['eval/episode_reward_std'])
+
+        plt.figure(1)
+        plt.xlim([0, num_timesteps * 1.25])
+        plt.ylim([min_y, max_y])
+
+        plt.xlabel('# environment steps')
+        plt.ylabel('Swing Agent Reward per Episode')
+        plt.title(f'Swing Agent Reward: {y_data_swing[-1]:.3f}')
+
+        plt.errorbar(x_data_swing, y_data_swing, yerr=ydataerr_swing)
+        plt.savefig("training_swing_agent_go2.png")
+        progress_bar_swing.update(num_steps - progress_bar_swing.n)
+
+    def progress_stance(num_steps, metrics):
+        """Logs and visualizes progress for stance agent."""
+        times.append(datetime.now())
+        x_data_stance.append(num_steps)
+        y_data_stance.append(metrics['eval/episode_reward'])
+        ydataerr_stance.append(metrics['eval/episode_reward_std'])
+
+        plt.figure(2)
+        plt.xlim([0, num_timesteps * 1.25])
+        plt.ylim([min_y, max_y])
+
+        plt.xlabel('# environment steps')
+        plt.ylabel('Stance Agent Reward per Episode')
+        plt.title(f'Stance Agent Reward: {y_data_stance[-1]:.3f}')
+
+        plt.errorbar(x_data_stance, y_data_stance, yerr=ydataerr_stance)
+        plt.savefig("training_stance_agent_go2.png")
+        progress_bar_stance.update(num_steps - progress_bar_stance.n)
 
     # Train swing and stance agents independently
-    swing_agent_params, _ = swing_agent_train_fn(eval_env=eval_env)
-    stance_agent_params, _ = stance_agent_train_fn(eval_env=eval_env)
+    swing_agent_params, _ = ppo.train(
+        environment=env,
+        num_timesteps=num_timesteps,
+        network_factory=lambda **kwargs: agents["swing_agent"](**kwargs),  # Pass any additional arguments
+        progress_fn=progress_swing,
+        eval_env=eval_env,
+        **kwargs
+    )
+
+    stance_agent_params, _ = ppo.train(
+        environment=env,
+        num_timesteps=num_timesteps,
+        network_factory=lambda **kwargs: agents["stance_agent"](**kwargs),  # Pass any additional arguments
+        progress_fn=progress_stance,
+        eval_env=eval_env,
+        **kwargs
+    )
+
+
+    # Close the progress bars
+    progress_bar_swing.close()
+    progress_bar_stance.close()
 
     return swing_agent_params, stance_agent_params
+
 
 # Initialize logging and visualization
 x_data_swing = []
@@ -474,47 +533,6 @@ progress_bar_stance = tqdm(total=TIMESTEPS, desc='Stance Agent Training Progress
 
 
 
-def progress_swing(num_steps, metrics):
-    """Logs and visualizes progress for swing agent."""
-    times.append(datetime.now())
-    x_data_swing.append(num_steps)
-    y_data_swing.append(metrics['eval/episode_reward'])
-    ydataerr_swing.append(metrics['eval/episode_reward_std'])
-
-    plt.figure(1)
-    plt.xlim([0, TIMESTEPS * 1.25])
-    plt.ylim([min_y, max_y])
-
-    plt.xlabel('# environment steps')
-    plt.ylabel('Swing Agent Reward per Episode')
-    plt.title(f'Swing Agent Reward: {y_data_swing[-1]:.3f}')
-
-    plt.errorbar(x_data_swing, y_data_swing, yerr=ydataerr_swing)
-    plt.savefig("training_swing_agent_go2.png")
-    # Update tqdm progress bar
-    progress_bar_swing.update(num_steps - progress_bar_swing.n)
-
-
-def progress_stance(num_steps, metrics):
-    """Logs and visualizes progress for stance agent."""
-    times.append(datetime.now())
-    x_data_stance.append(num_steps)
-    y_data_stance.append(metrics['eval/episode_reward'])
-    ydataerr_stance.append(metrics['eval/episode_reward_std'])
-
-    plt.figure(2)
-    plt.xlim([0, TIMESTEPS * 1.25])
-    plt.ylim([min_y, max_y])
-
-    plt.xlabel('# environment steps')
-    plt.ylabel('Stance Agent Reward per Episode')
-    plt.title(f'Stance Agent Reward: {y_data_stance[-1]:.3f}')
-
-    plt.errorbar(x_data_stance, y_data_stance, yerr=ydataerr_stance)
-    plt.savefig("training_stance_agent_go2.png")
-    # Update tqdm progress bar
-    progress_bar_stance.update(num_steps - progress_bar_stance.n)
-
 # Reset environments and initialize inference function
 env = envs.get_environment(env_name)
 eval_env = envs.get_environment(env_name)
@@ -524,8 +542,6 @@ swing_agent_params, stance_agent_params = train_ippo_agents(
     env=env,
     eval_env=eval_env,
     num_timesteps=TIMESTEPS,
-    progress_fn_swing=progress_swing,
-    progress_fn_stance=progress_stance,
     num_evals=10,
     reward_scaling=1,
     episode_length=1000,
@@ -542,10 +558,6 @@ swing_agent_params, stance_agent_params = train_ippo_agents(
     randomization_fn=domain_randomize,
     seed=0
 )
-
-# Close the tqdm progress bars
-progress_bar_swing.close()
-progress_bar_stance.close()
 
 print(f'Time to JIT: {times[1] - times[0]}')
 print(f'Time to train: {times[-1] - times[1]}')
