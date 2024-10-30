@@ -420,21 +420,32 @@ env = envs.get_environment(env_name)
 
 # Create the two-agent (swing and stance) network factory
 def make_ippo_networks_factory(observation_size, action_size):
-    """Creates the same network architecture for both swing and stance agents."""
-    return {
-        "swing_agent": lambda obs_size, act_size, **kwargs: ppo_networks.make_ppo_networks(
-            observation_size=obs_size,
-            action_size=act_size,
+    """Creates network factories for both swing and stance agents."""
+    
+    # Define swing and stance agent network factories to accept positional args directly
+    def swing_agent_network_factory(observation_size, action_size, **kwargs):
+        return ppo_networks.make_ppo_networks(
+            observation_size=observation_size,
+            action_size=action_size,
             policy_hidden_layer_sizes=(128, 128, 128, 128),
-            **kwargs  # Ensure any additional arguments are passed here
-        ),
-        "stance_agent": lambda obs_size, act_size, **kwargs: ppo_networks.make_ppo_networks(
-            observation_size=obs_size,
-            action_size=act_size,
-            policy_hidden_layer_sizes=(128, 128, 128, 128),
-            **kwargs  # Ensure any additional arguments are passed here
+            **kwargs
         )
+    
+    def stance_agent_network_factory(observation_size, action_size, **kwargs):
+        return ppo_networks.make_ppo_networks(
+            observation_size=observation_size,
+            action_size=action_size,
+            policy_hidden_layer_sizes=(128, 128, 128, 128),
+            **kwargs
+        )
+    
+    # Return both factories, each accepting observation and action sizes as args
+    return {
+        "swing_agent": swing_agent_network_factory,
+        "stance_agent": stance_agent_network_factory
     }
+
+
 
 # Train function to support the two agents
 def train_ippo_agents(env, eval_env, num_timesteps=100_000_000, **kwargs):
@@ -494,7 +505,7 @@ def train_ippo_agents(env, eval_env, num_timesteps=100_000_000, **kwargs):
     swing_agent_params, _ = ppo.train(
         environment=env,
         num_timesteps=num_timesteps,
-        network_factory=lambda **kwargs: agents["swing_agent"](**kwargs),  # Pass any additional arguments
+        network_factory=agents["swing_agent"],  # Use the swing agent factory directly
         progress_fn=progress_swing,
         eval_env=eval_env,
         **kwargs
@@ -503,12 +514,11 @@ def train_ippo_agents(env, eval_env, num_timesteps=100_000_000, **kwargs):
     stance_agent_params, _ = ppo.train(
         environment=env,
         num_timesteps=num_timesteps,
-        network_factory=lambda **kwargs: agents["stance_agent"](**kwargs),  # Pass any additional arguments
+        network_factory=agents["stance_agent"],  # Use the stance agent factory directly
         progress_fn=progress_stance,
         eval_env=eval_env,
         **kwargs
     )
-
 
     # Close the progress bars
     progress_bar_swing.close()
@@ -599,13 +609,14 @@ render_every = 2
 
 # Run inference and simulation loop
 for i in range(n_steps):
-    act_rng, rng = jax.random.split(rng)
+    # Split RNG for both agents to ensure each receives a unique key
+    act_rng_swing, act_rng_stance, rng = jax.random.split(rng, 3)
     
     # Generate actions from both swing and stance agents
-    action_swing, _ = swing_inference_fn(state.obs, act_rng)
-    action_stance, _ = stance_inference_fn(state.obs, act_rng)
+    action_swing, _ = swing_inference_fn(state.obs, act_rng_swing)
+    action_stance, _ = stance_inference_fn(state.obs, act_rng_stance)
     
-    # Apply actions in the environment using the updated step function (for swing/stance actions)
+    # Apply actions in the environment using the updated step function for swing and stance actions
     state = jit_step(state, action_swing, action_stance)
     
     # Collect rollout for visualization
